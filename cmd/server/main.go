@@ -29,6 +29,16 @@ func main() {
 
 	fmt.Println("Connected to RabbitMQ.")
 
+	_, _, err = pubsub.DeclareAndBind(
+		conn, routing.ExchangePerilTopic, "game_logs", routing.GameLogSlug+".*",
+		pubsub.Durable,
+	)
+	if err != nil {
+		fmt.Println("Failed to declare and bind game_logs queue:", err)
+		os.Exit(1)
+	}
+	fmt.Println("Game logs queue declared and bound.")
+
 	gamelogic.PrintServerHelp()
 
 	for {
