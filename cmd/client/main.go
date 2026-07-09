@@ -17,6 +17,13 @@ func handlerPause(gs *gamelogic.GameState) func(routing.PlayingState) {
 	}
 }
 
+func handlerMove(gs *gamelogic.GameState) func(gamelogic.ArmyMove) {
+	return func(m gamelogic.ArmyMove) {
+		defer fmt.Print("> ")
+		gs.HandleMove(m)
+	}
+}
+
 func main() {
 	const connString = "amqp://guest:guest@localhost:5672/"
 
@@ -27,6 +34,13 @@ func main() {
 	}
 	defer conn.Close()
 
+	ch, err := conn.Channel()
+	if err != nil {
+		fmt.Println("Failed to create channel:", err)
+		os.Exit(1)
+	}
+	defer ch.Close()
+
 	username, err := gamelogic.ClientWelcome()
 	if err != nil {
 		fmt.Println("Failed to get username:", err)
@@ -34,6 +48,8 @@ func main() {
 	}
 
 	gameState := gamelogic.NewGameState(username)
+
+	// pause
 	err = pubsub.SubscribeJSON(
 		conn,
 		routing.ExchangePerilDirect,
@@ -48,6 +64,22 @@ func main() {
 	}
 
 	fmt.Printf("Subscribed to pause messages on queue: pause.%s\n", username)
+
+	// move
+	err = pubsub.SubscribeJSON(
+		conn,
+		routing.ExchangePerilTopic,
+		fmt.Sprintf("army_moves.%s", username),
+		routing.ArmyMovesPrefix+".*",
+		pubsub.Transient,
+		handlerMove(gameState),
+	)
+	if err != nil {
+		fmt.Println("Failed to subscribe to army moves:", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Subscribed to army moves on queue: army_moves.%s\n", username)
 
 	for {
 		words := gamelogic.GetInput()
@@ -64,11 +96,21 @@ func main() {
 				fmt.Println("Error spawning unit:", err)
 			}
 		case "move":
-			_, err := gameState.CommandMove(words)
+			msg, err := gameState.CommandMove(words)
 			if err != nil {
 				fmt.Println("Error moving unit:", err)
 			} else {
-				fmt.Println("Unit moved successfully.")
+				err = pubsub.PublishJSON(
+					ch,
+					routing.ExchangePerilTopic,
+					fmt.Sprintf("army_moves.%s", username),
+					msg,
+				)
+				if err != nil {
+					fmt.Println("Failed to publish move:", err)
+				} else {
+					fmt.Println("Move published successfully.")
+				}
 			}
 		case "status":
 			gameState.CommandStatus()
