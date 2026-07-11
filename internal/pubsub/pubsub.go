@@ -35,13 +35,17 @@ func DeclareAndBind(
 		return nil, amqp.Queue{}, err
 	}
 
+	args := amqp.Table{
+		"x-dead-letter-exchange": "peril_dlx",
+	}
+
 	queue, err := ch.QueueDeclare(
 		queueName,              // name
 		queueType == Durable,   // durable
 		queueType == Transient, // autoDelete
 		queueType == Transient, // exclusive
 		false,                  // noWait
-		nil,                    // args
+		args,                   // args
 	)
 	if err != nil {
 		return nil, amqp.Queue{}, err
