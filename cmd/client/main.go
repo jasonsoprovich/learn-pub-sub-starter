@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/gamelogic"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/pubsub"
@@ -50,27 +51,47 @@ func handlerMove(gs *gamelogic.GameState, ch *amqp.Channel) func(gamelogic.ArmyM
 	}
 }
 
-func handlerWar(gs *gamelogic.GameState) func(gamelogic.RecognitionOfWar) pubsub.AckType {
+func handlerWar(gs *gamelogic.GameState, ch *amqp.Channel) func(gamelogic.RecognitionOfWar) pubsub.AckType {
 	return func(rw gamelogic.RecognitionOfWar) pubsub.AckType {
 		defer fmt.Print("> ")
-		outcome, _, _ := gs.HandleWar(rw)
+		outcome, winner, loser := gs.HandleWar(rw)
 
+		var logMessage string
 		switch outcome {
 		case gamelogic.WarOutcomeNotInvolved:
 			return pubsub.NackRequeue
 		case gamelogic.WarOutcomeNoUnits:
 			return pubsub.NackDiscard
 		case gamelogic.WarOutcomeOpponentWon:
-			return pubsub.Ack
+			logMessage = fmt.Sprintf("%s won a war against %s", winner, loser)
+			// return pubsub.Ack
 		case gamelogic.WarOutcomeYouWon:
-			return pubsub.Ack
+			logMessage = fmt.Sprintf("%s won a war against %s", winner, loser)
+			// return pubsub.Ack
 		case gamelogic.WarOutcomeDraw:
+			logMessage = fmt.Sprintf("A war between %s and %s resulted in a draw", winner, loser)
 			return pubsub.Ack
 		default:
 			fmt.Println("Unknown war outcome.")
 			return pubsub.NackDiscard
 		}
 
+		gameLog := routing.GameLog{
+			CurrentTime: time.Now(),
+			Message:     logMessage,
+			Username:    rw.Attacker.Username,
+		}
+		err := pubsub.PublishGob(
+			ch,
+			routing.ExchangePerilTopic,
+			fmt.Sprintf("%s.%s", routing.GameLogSlug, rw.Attacker.Username),
+			gameLog,
+		)
+		if err != nil {
+			fmt.Println("Failed to publish game log:", err)
+			return pubsub.NackRequeue
+		}
+		return pubsub.Ack
 	}
 }
 
@@ -137,7 +158,7 @@ func main() {
 		"war",
 		routing.WarRecognitionsPrefix+".*",
 		pubsub.Durable,
-		handlerWar(gameState),
+		handlerWar(gameState, ch),
 	)
 	if err != nil {
 		fmt.Println("Failed to subscribe to war messages:", err)
